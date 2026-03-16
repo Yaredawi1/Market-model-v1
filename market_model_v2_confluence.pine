@@ -1,0 +1,204 @@
+//@version=5
+indicator("Market Model v2 - Confluence Detector", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================================
+// MARKET MODEL V2 - CONFLUENCE DETECTOR
+// Combines: POC, Order Blocks, FVG, BOS, Wicks, Sweeps, Sessions
+// Output: 1-3 High-Probability Zones Only (Clean Chart)
+// ============================================================================
+
+// INPUT SETTINGS
+pocLookback = input.int(20, "POC Lookback", minval=5, maxval=50)
+obLookback = input.int(5, "Order Block Lookback", minval=2, maxval=15)
+fvgMin = input.float(0.5, "FVG Minimum Size (ATR)", minval=0.1, maxval=2.0)
+bosLookback = input.int(10, "BOS Lookback", minval=5, maxval=20)
+atrPeriod = input.int(14, "ATR Period", minval=5, maxval=50)
+confidenceThreshold = input.int(4, "Confluence Threshold (Min points)", minval=3, maxval=8)
+
+// Colors
+bullColor = input.color(color.new(color.green, 80), "Bull Zone Color")
+bearColor = input.color(color.new(color.red, 80), "Bear Zone Color")
+textColor_Bull = input.color(color.green, "Bull Label Color")
+textColor_Bear = input.color(color.red, "Bear Label Color")
+
+// Toggle Elements
+showDebug = input.bool(false, "Show Debug Info")
+
+// ============================================================================
+// CORE CALCULATIONS
+// ============================================================================
+
+atr = ta.atr(atrPeriod)
+
+// 1. POC (Point of Control) - Volume Analysis
+pocPrice = ta.highest(high, pocLookback) - (ta.highest(high, pocLookback) - ta.lowest(low, pocLookback)) / 2
+pocDist = math.abs(close - pocPrice)
+
+// 2. ORDER BLOCK DETECTION
+isHigherHigh = high > ta.highest(high, obLookback)[1]
+isLowerLow = low < ta.lowest(low, obLookback)[1]
+obBullStrength = isHigherHigh ? 1 : 0
+obBearStrength = isLowerLow ? 1 : 0
+
+// 3. FAIR VALUE GAP (FVG) DETECTION
+fvgBullGap = low[1] > high[2] and (high[1] - low[2]) > (fvgMin * atr)
+fvgBearGap = high[1] < low[2] and (high[2] - low[1]) > (fvgMin * atr)
+fvgScore = (fvgBullGap or fvgBearGap) ? 1 : 0
+
+// 4. BREAK OF STRUCTURE (BOS) DETECTION
+bosHigh = ta.highest(high, bosLookback)[1]
+bosLow = ta.lowest(low, bosLookback)[1]
+bosBull = close > bosHigh and open < bosHigh  // Bullish BOS
+bosBear = close < bosLow and open > bosLow    // Bearish BOS
+bosScore = (bosBull or bosBear) ? 1 : 0
+
+// 5. WICK CLUSTER STRENGTH
+wickUp = high - math.max(close, open)
+wickDown = math.min(close, open) - low
+avgWick = ta.sma(math.max(wickUp, wickDown), pocLookback)
+wickScore_Bull = (wickDown > avgWick * 1.2) ? 1 : 0
+wickScore_Bear = (wickUp > avgWick * 1.2) ? 1 : 0
+
+// 6. LIQUIDITY SWEEP DETECTION
+liquidityUp = low < ta.lowest(low, 5)[1] and close > open
+liquidityDown = high > ta.highest(high, 5)[1] and close < open
+liqScore = (liquidityUp or liquidityDown) ? 1 : 0
+
+// 7. SESSION STRENGTH
+londonTime = (hour >= 8 and hour <= 17)
+nyTime = (hour >= 13 and hour <= 22)
+asiaTime = (hour >= 0 and hour <= 7)
+sessionScore = (londonTime or nyTime) ? 1 : 0
+
+// 8. BIAS (EMA-based)
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+isBullish = ema20 > ema50
+isBearish = ema20 < ema50
+
+// 9. POC PROXIMITY SCORE
+pocProximityScore = pocDist < (atr * 0.5) ? 1 : 0
+
+// ============================================================================
+// CONFLUENCE SCORING SYSTEM
+// ============================================================================
+
+// BULLISH CONFLUENCE SCORE
+bullConfluence = 0
+bullConfluence += (isBullish ? 1 : 0)           // Bias
+bullConfluence += obBullStrength                // Order Block
+bullConfluence += wickScore_Bull                // Wick Cluster
+bullConfluence += (fvgBullGap ? 1 : 0)         // FVG Gap
+bullConfluence += (bosBull ? 1 : 0)            // BOS
+bullConfluence += (liquidityUp ? 1 : 0)        // Liquidity Sweep
+bullConfluence += sessionScore                  // Session
+bullConfluence += pocProximityScore             // POC Proximity
+
+// BEARISH CONFLUENCE SCORE
+bearConfluence = 0
+bearConfluence += (isBearish ? 1 : 0)          // Bias
+bearConfluence += obBearStrength                // Order Block
+bearConfluence += wickScore_Bear                // Wick Cluster
+bearConfluence += (fvgBearGap ? 1 : 0)         // FVG Gap
+bearConfluence += (bosBear ? 1 : 0)            // BOS
+bearConfluence += (liquidityDown ? 1 : 0)      // Liquidity Sweep
+bearConfluence += sessionScore                  // Session
+bearConfluence += pocProximityScore             // POC Proximity
+
+// ============================================================================
+// SIGNAL GENERATION (1-3 CONFIDENCE LEVELS)
+// ============================================================================
+
+bullSignal = bullConfluence >= confidenceThreshold
+bearSignal = bearConfluence >= confidenceThreshold
+
+// Confidence Level: 1 (weak), 2 (medium), 3 (strong)
+bullConfidenceLevel = bullConfluence >= 7 ? 3 : bullConfluence >= 5 ? 2 : bullConfluence >= confidenceThreshold ? 1 : 0
+bearConfidenceLevel = bearConfluence >= 7 ? 3 : bearConfluence >= 5 ? 2 : bearConfluence >= confidenceThreshold ? 1 : 0
+
+// ============================================================================
+// ZONE PLOTTING (CLEAN - ONLY HIGH PROBABILITY ZONES)
+// ============================================================================
+
+// BULLISH ZONES
+if bullSignal
+    zoneHigh = high + (atr * 0.5)
+    zoneLow = low - (atr * 1.5)
+    
+    box.new(bar_index - 5, zoneHigh, bar_index + 5, zoneLow, 
+            bgcolor=bullColor, border_color=textColor_Bull, border_width=2, 
+            xloc=xloc.bar_time)
+    
+    confidenceText = bullConfidenceLevel == 3 ? "🟢 STRONG BULL (3)" : 
+                     bullConfidenceLevel == 2 ? "🟢 MEDIUM BULL (2)" : "🟢 WEAK BULL (1)"
+    
+    label.new(bar_index, high + atr, confidenceText, 
+             color=bullColor, textcolor=textColor_Bull, style=label.style_labelup, 
+             size=size.large)
+
+// BEARISH ZONES
+if bearSignal
+    zoneHigh = high + (atr * 1.5)
+    zoneLow = low - (atr * 0.5)
+    
+    box.new(bar_index - 5, zoneHigh, bar_index + 5, zoneLow, 
+            bgcolor=bearColor, border_color=textColor_Bear, border_width=2, 
+            xloc=xloc.bar_time)
+    
+    confidenceText = bearConfidenceLevel == 3 ? "🔴 STRONG BEAR (3)" : 
+                     bearConfidenceLevel == 2 ? "🔴 MEDIUM BEAR (2)" : "🔴 WEAK BEAR (1)"
+    
+    label.new(bar_index, low - atr, confidenceText, 
+             color=bearColor, textcolor=textColor_Bear, style=label.style_labeldown, 
+             size=size.large)
+
+// ============================================================================
+// ALERTS
+// ============================================================================
+
+if bullSignal and bullConfidenceLevel >= 2
+    alert("🚀 BULLISH CONFLUENCE - Confidence: " + str.tostring(bullConfidenceLevel), alert.freq_once_per_bar)
+
+if bearSignal and bearConfidenceLevel >= 2
+    alert("⛔ BEARISH CONFLUENCE - Confidence: " + str.tostring(bearConfidenceLevel), alert.freq_once_per_bar)
+
+// ============================================================================
+// DEBUG TABLE (Optional)
+// ============================================================================
+
+if showDebug
+    debugTable = table.new(position.top_right, 2, 10, border_color=color.gray, border_width=1)
+    
+    table.cell(debugTable, 0, 0, "METRIC", bgcolor=color.new(color.black, 50), text_color=color.white)
+    table.cell(debugTable, 1, 0, "SCORE", bgcolor=color.new(color.black, 50), text_color=color.white)
+    
+    table.cell(debugTable, 0, 1, "Bull Confluence", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 1, str.tostring(bullConfluence), text_color=textColor_Bull, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 2, "Bear Confluence", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 2, str.tostring(bearConfluence), text_color=textColor_Bear, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 3, "POC Price", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 3, str.tostring(math.round(pocPrice, 2)), text_color=color.yellow, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 4, "FVG Bull", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 4, fvgBullGap ? "✓" : "✗", text_color=textColor_Bull, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 5, "FVG Bear", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 5, fvgBearGap ? "✓" : "✗", text_color=textColor_Bear, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 6, "BOS Bull", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 6, bosBull ? "✓" : "✗", text_color=textColor_Bull, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 7, "BOS Bear", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 7, bosBear ? "✓" : "✗", text_color=textColor_Bear, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 8, "Session", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 8, londonTime ? "London" : nyTime ? "NY" : "Asia", text_color=color.white, bgcolor=color.new(color.black, 50))
+    
+    table.cell(debugTable, 0, 9, "Bias", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(debugTable, 1, 9, isBullish ? "BULL" : "BEAR", text_color=isBullish ? textColor_Bull : textColor_Bear, bgcolor=color.new(color.black, 50))
+
+// ============================================================================
+// END OF INDICATOR
+// ============================================================================
