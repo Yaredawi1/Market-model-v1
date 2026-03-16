@@ -1,0 +1,208 @@
+//@version=5
+indicator("Market Model v1 - SMC Indicator", overlay=true, max_lines_count=500, max_boxes_count=500, max_labels_count=500)
+
+// ============================================================================
+// INPUT SETTINGS
+// ============================================================================
+
+// POC Settings
+pocLookback = input.int(20, "POC Lookback Period", minval=5, maxval=100)
+pocColor = input.color(color.yellow, "POC Line Color")
+
+// Wick Cluster Settings
+wickThreshold = input.float(0.7, "Wick Cluster Threshold", minval=0.1, maxval=2.0)
+wickColor_Bull = input.color(color.green, "Bull Wick Color")
+wickColor_Bear = input.color(color.red, "Bear Wick Color")
+
+// Session Settings
+showLondonSession = input.bool(true, "Show London Session")
+showNYSession = input.bool(true, "Show NY Session")
+londonSessionColor = input.color(color.new(color.blue, 90), "London Session Color")
+nySessionColor = input.color(color.new(color.orange, 90), "NY Session Color")
+
+// Order Block Settings
+showOrderBlocks = input.bool(true, "Show Order Blocks")
+obColor_Bull = input.color(color.new(color.green, 80), "Bull OB Color")
+obColor_Bear = input.color(color.new(color.red, 80), "Bear OB Color")
+obLookback = input.int(5, "Order Block Lookback", minval=2, maxval=20)
+
+// Liquidity Sweep Settings
+showLiquiditySweep = input.bool(true, "Show Liquidity Sweeps")
+liqColor_Up = input.color(color.new(color.aqua, 50), "Liquidity Up Color")
+liqColor_Down = input.color(color.new(color.magenta, 50), "Liquidity Down Color")
+liqThreshold = input.float(1.5, "Liquidity Threshold (ATR multiplier)", minval=0.5, maxval=3.0)
+
+// Alert Settings
+showAlerts = input.bool(true, "Show Alerts")
+atrPeriod = input.int(14, "ATR Period", minval=5, maxval=50)
+
+// Info Table Settings
+showInfoTable = input.bool(true, "Show Info Table")
+tableLocation = input.string("top_right", "Table Location", options=["top_right", "top_left", "bottom_right", "bottom_left"])
+
+// ============================================================================
+// CALCULATIONS
+// ============================================================================
+
+// ATR Calculation
+atr = ta.atr(atrPeriod)
+
+// Volume Profile for POC
+pocPrice = ta.highest(high, pocLookback) - (ta.highest(high, pocLookback) - ta.lowest(low, pocLookback)) / 2
+
+// Wick Analysis
+wickLength_Up = high - math.max(close, open)
+wickLength_Down = math.min(close, open) - low
+avgWick = ta.sma(math.max(wickLength_Up, wickLength_Down), pocLookback)
+
+// Order Block Detection
+isHigherHigh = high > ta.highest(high, obLookback)[1]
+isLowerLow = low < ta.lowest(low, obLookback)[1]
+
+// Liquidity Sweep Detection
+highSweep = high > ta.highest(high, 5)[1] and close < open
+lowSweep = low < ta.lowest(low, 5)[1] and close > open
+
+// Bias Calculation (using EMA)
+ema20 = ta.ema(close, 20)
+ema50 = ta.ema(close, 50)
+bias = ema20 > ema50 ? "BULLISH" : "BEARISH"
+biasColor = ema20 > ema50 ? color.green : color.red
+
+// ============================================================================
+// POC LINE (Yellow Cross)
+// ============================================================================
+
+if pocPrice > 0
+    line.new(bar_index - pocLookback, pocPrice, bar_index, pocPrice, color=pocColor, width=2, style=line.style_dotted)
+
+// ============================================================================
+// WICK CLUSTER DETECTION (Red/Green Dashed Lines)
+// ============================================================================
+
+if showOrderBlocks and wickLength_Up > avgWick * wickThreshold
+    line.new(bar_index, high, bar_index, high - wickLength_Up, color=wickColor_Bull, width=1, style=line.style_dashed)
+
+if showOrderBlocks and wickLength_Down > avgWick * wickThreshold
+    line.new(bar_index, low, bar_index, low + wickLength_Down, color=wickColor_Bear, width=1, style=line.style_dashed)
+
+// ============================================================================
+// SESSION BOXES (London & New York)
+// ============================================================================
+
+// London Session (08:00 - 17:00 CET / 02:00 - 11:00 EST)
+if showLondonSession
+    londonHour = hour(timenow)
+    if londonHour == 8
+        box.new(bar_index, ta.highest(high, 480), bar_index + 480, ta.lowest(low, 480), 
+                bgcolor=londonSessionColor, border_color=color.blue, border_width=1)
+
+// New York Session (13:30 - 22:00 EST)
+if showNYSession
+    nyHour = hour(timenow)
+    if nyHour == 13
+        box.new(bar_index, ta.highest(high, 510), bar_index + 510, ta.lowest(low, 510), 
+                bgcolor=nySessionColor, border_color=color.orange, border_width=1)
+
+// ============================================================================
+// ORDER BLOCKS (Green Bull / Red Bear)
+// ============================================================================
+
+if showOrderBlocks and isHigherHigh
+    obHigh = ta.highest(high, obLookback)
+    obLow = ta.lowest(low, obLookback)
+    box.new(bar_index - obLookback, obHigh, bar_index, obLow, 
+            bgcolor=obColor_Bull, border_color=color.green, border_width=2)
+    label.new(bar_index - obLookback/2, obHigh, "Bull OB", color=color.green, textcolor=color.white, size=size.small)
+
+if showOrderBlocks and isLowerLow
+    obHigh = ta.highest(high, obLookback)
+    obLow = ta.lowest(low, obLookback)
+    box.new(bar_index - obLookback, obHigh, bar_index, obLow, 
+            bgcolor=obColor_Bear, border_color=color.red, border_width=2)
+    label.new(bar_index - obLookback/2, obLow, "Bear OB", color=color.red, textcolor=color.white, size=size.small)
+
+// ============================================================================
+// LIQUIDITY SWEEP ARROWS (Cyan Up / Magenta Down)
+// ============================================================================
+
+if showLiquiditySweep and highSweep
+    label.new(bar_index, high + atr, "🔺", color=liqColor_Up, textcolor=color.aqua, size=size.large)
+
+if showLiquiditySweep and lowSweep
+    label.new(bar_index, low - atr, "🔻", color=liqColor_Down, textcolor=color.magenta, size=size.large)
+
+// ============================================================================
+// LONG/SHORT LABELS
+// ============================================================================
+
+// LONG Signal: Bullish Bias + Bull OB + Low Sweep
+longSignal = bias == "BULLISH" and lowSweep and isHigherHigh
+if longSignal
+    label.new(bar_index, low - atr*2, "LONG", color=color.new(color.green, 0), textcolor=color.white, 
+              style=label.style_labelup, size=size.normal)
+
+// SHORT Signal: Bearish Bias + Bear OB + High Sweep
+shortSignal = bias == "BEARISH" and highSweep and isLowerLow
+if shortSignal
+    label.new(bar_index, high + atr*2, "SHORT", color=color.new(color.red, 0), textcolor=color.white, 
+              style=label.style_labeldown, size=size.normal)
+
+// ============================================================================
+// INFO TABLE (Top-Right)
+// ============================================================================
+
+if showInfoTable
+    tablePos = tableLocation == "top_right" ? position.top_right : 
+               tableLocation == "top_left" ? position.top_left :
+               tableLocation == "bottom_right" ? position.bottom_right : position.bottom_left
+    
+    infoTable = table.new(tablePos, 2, 5, border_color=color.gray, border_width=1)
+    
+    table.cell(infoTable, 0, 0, "METRIC", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(infoTable, 1, 0, "VALUE", text_color=color.white, bgcolor=color.new(color.black, 50))
+    
+    table.cell(infoTable, 0, 1, "Bias", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(infoTable, 1, 1, bias, text_color=biasColor, bgcolor=color.new(color.black, 50))
+    
+    table.cell(infoTable, 0, 2, "POC Price", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(infoTable, 1, 2, str.tostring(math.round(pocPrice, 2)), text_color=pocColor, bgcolor=color.new(color.black, 50))
+    
+    table.cell(infoTable, 0, 3, "ATR", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(infoTable, 1, 3, str.tostring(math.round(atr, 2)), text_color=color.yellow, bgcolor=color.new(color.black, 50))
+    
+    table.cell(infoTable, 0, 4, "Distance to POC", text_color=color.white, bgcolor=color.new(color.black, 50))
+    table.cell(infoTable, 1, 4, str.tostring(math.round(math.abs(close - pocPrice), 2)), text_color=color.blue, bgcolor=color.new(color.black, 50))
+
+// ============================================================================
+// ALERT SYSTEM (6 Conditions)
+// ============================================================================
+
+if showAlerts
+    // Alert 1: LONG Signal
+    if longSignal
+        alert("🚀 LONG SIGNAL - Bullish Confluence Detected!", alert.freq_once_per_bar)
+    
+    // Alert 2: SHORT Signal
+    if shortSignal
+        alert("⛔ SHORT SIGNAL - Bearish Confluence Detected!", alert.freq_once_per_bar)
+    
+    // Alert 3: Liquidity Sweep Up
+    if highSweep
+        alert("💧 LIQUIDITY SWEEP UP - Potential Reversal!", alert.freq_once_per_bar)
+    
+    // Alert 4: Liquidity Sweep Down
+    if lowSweep
+        alert("💧 LIQUIDITY SWEEP DOWN - Potential Reversal!", alert.freq_once_per_bar)
+    
+    // Alert 5: Order Block Confirmation (Bull)
+    if isHigherHigh
+        alert("📦 BULL ORDER BLOCK - Support Zone Formed!", alert.freq_once_per_bar)
+    
+    // Alert 6: Order Block Confirmation (Bear)
+    if isLowerLow
+        alert("📦 BEAR ORDER BLOCK - Resistance Zone Formed!", alert.freq_once_per_bar)
+
+// ============================================================================
+// END OF INDICATOR
+// ============================================================================
